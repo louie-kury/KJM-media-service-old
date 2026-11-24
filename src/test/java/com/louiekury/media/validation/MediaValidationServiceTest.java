@@ -4,6 +4,7 @@ import com.louiekury.media.validation.adapter.out.FileSignatureDetector;
 import com.louiekury.media.validation.application.service.MediaValidationException;
 import com.louiekury.media.validation.application.service.MediaValidationService;
 import com.louiekury.media.validation.domain.MediaUsage;
+import com.louiekury.media.validation.domain.MediaType;
 import com.louiekury.media.validation.domain.ValidationFailure;
 import org.junit.jupiter.api.Test;
 
@@ -62,6 +63,14 @@ class MediaValidationServiceTest {
             invalid(ValidationFailure.UNSUPPORTED_TYPE, MediaUsage.POST_ATTACHMENT, "file.mp4", mime,
                     new ByteArrayInputStream(MP4));
         }
+    }
+
+    @Test void acceptsLongQuotedMimeParameterWithoutStackOverflow() {
+        assertEquals(MediaType.MP4, MediaType.fromContentType("video/mp4; codecs=\"" + "a".repeat(32_000) + "\""));
+        assertEquals(MediaType.MP4, MediaType.fromContentType("video/mp4; codecs=\"" + "\\\"".repeat(16_000) + "\""));
+        assertEquals(MediaType.MP4, MediaType.fromContentType("video/mp4; x=" + "a".repeat(32_000)));
+        assertEquals(MediaType.MP4, MediaType.fromContentType("video/mp4" + ";x=a".repeat(8_000)));
+        assertNull(MediaType.fromContentType("video/mp4; codecs=\"" + "a".repeat(32_000)));
     }
 
     @Test void rejectsTruncatedOrInvalidMp4FileTypeBox() {

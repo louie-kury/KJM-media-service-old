@@ -9,10 +9,10 @@ public enum MediaType {
     WEBP("image/webp", 10_000_000L), MP4("video/mp4", 100_000_000L);
 
     // 타입과 매개변수의 문법을 검증한 뒤 기본 타입만 비교합니다.
-    private static final String TOKEN = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
+    private static final String TOKEN = "[!#$%&'*+.^_`|~0-9A-Za-z-]++";
     private static final Pattern CONTENT_TYPE = Pattern.compile(
-            "^[ \\t]*(" + TOKEN + "/" + TOKEN + ")[ \\t]*(?:;[ \\t]*" + TOKEN
-                    + "[ \\t]*=[ \\t]*(?:" + TOKEN + "|\"(?:[\\x20-\\x21\\x23-\\x5b\\x5d-\\x7e\\t]|\\\\[\\x20-\\x7e\\t])*\")[ \\t]*)*$");
+            "^[ \\t]*+(" + TOKEN + "/" + TOKEN + ")[ \\t]*+(?:;[ \\t]*+" + TOKEN
+                    + "[ \\t]*+=[ \\t]*+(?:" + TOKEN + "|\"(?:[\\x20-\\x21\\x23-\\x5b\\x5d-\\x7e\\t]|\\\\[\\x20-\\x7e\\t])*+\")[ \\t]*+)*+$");
 
     private final String mimeType;
     private final long maxBytes;
