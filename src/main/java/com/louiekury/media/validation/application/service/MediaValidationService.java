@@ -82,41 +82,57 @@ public class MediaValidationService {
     private ValidatedMedia validateContents(MediaType filenameType, InputStream input, OutputStream stagedOutput,
                                             OutputStream temporaryOutput) {
 
-        // ftyp 식별 범위를 제한하여 임의 크기의 메모리 할당을 방지합니다.
+        // 판별에 필요한 앞부분을 먼저 모아 불일치 파일을 출력에 쓰기 전에 거절합니다.
         byte[] prefix = new byte[4096];
-        byte[] buffer = new byte[8192];
         int prefixLength = 0;
-        long size = 0;
-        while (true) {
-            int count;
-            try {
-                count = input.read(buffer, 0, (int) Math.min(buffer.length, filenameType.getMaxBytes() + 1 - size));
-                if (count == 0) {
-                    int one = input.read();
-                    if (one < 0) break;
-                    buffer[0] = (byte) one;
-                    count = 1;
-                }
-            } catch (IOException error) {
-                throw new MediaValidationException(ValidationFailure.READ_ERROR, error);
+        boolean eof = false;
+        while (prefixLength < prefix.length) {
+            int count = read(input, prefix, prefixLength, prefix.length - prefixLength);
+            if (count < 0) {
+                eof = true;
+                break;
             }
-            if (count < 0) break;
-            size += count;
-            if (size > filenameType.getMaxBytes()) throw new MediaValidationException(ValidationFailure.FILE_TOO_LARGE);
-            int copyLength = Math.min(count, prefix.length - prefixLength);
-            System.arraycopy(buffer, 0, prefix, prefixLength, copyLength);
-            prefixLength += copyLength;
-            try {
-                stagedOutput.write(buffer, 0, count);
-                temporaryOutput.write(buffer, 0, count);
-            } catch (IOException error) {
-                throw new MediaValidationException(ValidationFailure.WRITE_ERROR, error);
-            }
+            prefixLength += count;
         }
-        if (size == 0) throw new MediaValidationException(ValidationFailure.EMPTY_FILE);
+        if (prefixLength == 0) throw new MediaValidationException(ValidationFailure.EMPTY_FILE);
         MediaType actualType = detector.detect(prefix, prefixLength);
         if (actualType == null) throw new MediaValidationException(ValidationFailure.UNKNOWN_CONTENT);
         if (actualType != filenameType) throw new MediaValidationException(ValidationFailure.TYPE_MISMATCH);
+
+        long size = prefixLength;
+        write(stagedOutput, temporaryOutput, prefix, prefixLength);
+        byte[] buffer = new byte[8192];
+        while (!eof) {
+            int count = read(input, buffer, 0, (int) Math.min(buffer.length, filenameType.getMaxBytes() + 1 - size));
+            if (count < 0) break;
+            size += count;
+            if (size > filenameType.getMaxBytes()) throw new MediaValidationException(ValidationFailure.FILE_TOO_LARGE);
+            write(stagedOutput, temporaryOutput, buffer, count);
+        }
         return new ValidatedMedia(actualType, size);
+    }
+
+    private static int read(InputStream input, byte[] buffer, int offset, int length) {
+        try {
+            int count = input.read(buffer, offset, length);
+            if (count == 0) {
+                int one = input.read();
+                if (one < 0) return -1;
+                buffer[offset] = (byte) one;
+                return 1;
+            }
+            return count;
+        } catch (IOException error) {
+            throw new MediaValidationException(ValidationFailure.READ_ERROR, error);
+        }
+    }
+
+    private static void write(OutputStream stagedOutput, OutputStream temporaryOutput, byte[] buffer, int count) {
+        try {
+            stagedOutput.write(buffer, 0, count);
+            temporaryOutput.write(buffer, 0, count);
+        } catch (IOException error) {
+            throw new MediaValidationException(ValidationFailure.WRITE_ERROR, error);
+        }
     }
 }

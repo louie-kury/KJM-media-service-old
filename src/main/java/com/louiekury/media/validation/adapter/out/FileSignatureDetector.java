@@ -27,10 +27,19 @@ public class FileSignatureDetector implements MediaContentDetector {
         if (length >= 12 && matches(prefix, 0, "RIFF") && matches(prefix, 8, "WEBP")) return MediaType.WEBP;
         if (length >= 16 && matches(prefix, 4, "ftyp")) {
             long size = ((prefix[0] & 255L) << 24) | ((prefix[1] & 255L) << 16) | ((prefix[2] & 255L) << 8) | (prefix[3] & 255L);
-            if (size < 16 || size > length || (size - 16) % 4 != 0) return null;
-            if (isImageBrand(prefix, 8) || matches(prefix, 8, "qt  ")) return null;
-            boolean mp4 = isMp4Brand(prefix, 8);
-            for (int offset = 16; offset < size; offset += 4) {
+            int headerSize = 8;
+            if (size == 1) {
+                // 상위 비트가 켜진 unsigned 64-bit 길이는 long 및 판별 범위를 초과합니다.
+                if (length < 24 || (prefix[8] & 0x80) != 0) return null;
+                size = 0;
+                for (int offset = 8; offset < 16; offset++) size = (size << 8) | (prefix[offset] & 255L);
+                headerSize = 16;
+            }
+            int brandsStart = headerSize + 8;
+            if (size < brandsStart || size > length || (size - brandsStart) % 4 != 0) return null;
+            if (isImageBrand(prefix, headerSize) || matches(prefix, headerSize, "qt  ")) return null;
+            boolean mp4 = isMp4Brand(prefix, headerSize);
+            for (int offset = brandsStart; offset < size; offset += 4) {
                 if (isImageBrand(prefix, offset)) return null;
                 mp4 |= isMp4Brand(prefix, offset);
             }
@@ -62,7 +71,9 @@ public class FileSignatureDetector implements MediaContentDetector {
             reader.join(1000);
             if (reader.isAlive()) throw new IOException("ffprobe output timeout");
             if (readFailed[0]) throw new IOException("ffprobe output read failed");
-            return process.exitValue() == 0 && found[0];
+            int exitCode = process.exitValue();
+            if (exitCode != 0) throw new IOException("ffprobe exited with code " + exitCode);
+            return found[0];
         } catch (InterruptedException error) {
             try { terminate(process); } finally { Thread.currentThread().interrupt(); }
             throw new IOException("ffprobe interrupted", error);
