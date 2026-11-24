@@ -46,6 +46,7 @@ public class MediaValidationService {
         } catch (IOException error) {
             throw new MediaValidationException(ValidationFailure.WRITE_ERROR, error);
         }
+        Throwable failure = null;
         try {
             ValidatedMedia result;
             try (OutputStream temporaryOutput = Files.newOutputStream(temporary)) {
@@ -58,13 +59,23 @@ public class MediaValidationService {
             }
             return result;
         } catch (IOException error) {
-            throw new MediaValidationException(ValidationFailure.WRITE_ERROR, error);
+            MediaValidationException wrapped = new MediaValidationException(ValidationFailure.WRITE_ERROR, error);
+            failure = wrapped;
+            throw wrapped;
+        } catch (RuntimeException | Error error) {
+            failure = error;
+            throw error;
         } finally {
-            try {
-                Files.deleteIfExists(temporary);
-            } catch (IOException error) {
-                throw new MediaValidationException(ValidationFailure.WRITE_ERROR, error);
-            }
+            cleanupTemporaryFile(temporary, failure);
+        }
+    }
+
+    static void cleanupTemporaryFile(Path temporary, Throwable failure) {
+        try {
+            Files.deleteIfExists(temporary);
+        } catch (IOException | SecurityException error) {
+            if (failure != null) failure.addSuppressed(error);
+            else throw new MediaValidationException(ValidationFailure.WRITE_ERROR, error);
         }
     }
 

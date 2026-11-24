@@ -44,9 +44,24 @@ class MediaValidationServiceTest {
     }
 
     @Test void acceptsCompatibleMp4BrandWhenMajorBrandIsUnknown() {
-        byte[] compatible = {0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', '8',
-                0, 0, 0, 0, 'i', 's', 'o', 'm', 'm', 'p', '4', '2'};
+        byte[] compatible = {0, 0, 0, 20, 'f', 't', 'y', 'p', 'z', 'z', 'z', 'z',
+                0, 0, 0, 0, 'm', 'p', '4', '2'};
         valid(MediaUsage.POST_ATTACHMENT, "clip.mp4", "video/mp4", compatible);
+    }
+
+    @Test void acceptsMimeParametersWithoutChangingFileValidation() {
+        valid(MediaUsage.POST_ATTACHMENT, "file.mp4", "video/mp4; codecs=\"avc1.42E01E\"", MP4);
+        valid(MediaUsage.POST_ATTACHMENT, "file.jpg", " IMAGE/JPEG ; charset=utf-8", JPEG);
+        invalid(ValidationFailure.TYPE_MISMATCH, MediaUsage.POST_ATTACHMENT, "file.jpg",
+                "image/png; charset=utf-8", new ByteArrayInputStream(JPEG));
+    }
+
+    @Test void rejectsMalformedMimeParameters() {
+        for (String mime : new String[]{"video/mp4;", "video/mp4; codecs", "video/mp4; =value",
+                "video/mp4; codecs=", "video/mp4; codecs=\"unterminated", "video/mp4; x=y;"}) {
+            invalid(ValidationFailure.UNSUPPORTED_TYPE, MediaUsage.POST_ATTACHMENT, "file.mp4", mime,
+                    new ByteArrayInputStream(MP4));
+        }
     }
 
     @Test void rejectsTruncatedOrInvalidMp4FileTypeBox() {
