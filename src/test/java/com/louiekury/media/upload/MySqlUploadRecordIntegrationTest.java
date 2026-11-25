@@ -97,8 +97,9 @@ class MySqlUploadRecordIntegrationTest {
         assertEquals(1, count(jdbc, "SELECT COUNT(*) FROM media WHERE object_key = ?", racedKey));
         assertEquals(1, count(jdbc, "SELECT COUNT(*) FROM temporary_attachment t JOIN media m ON t.media_id = m.id WHERE m.object_key = ?", racedKey));
 
-        var reconnected = new JdbcUploadRecordStore(new JdbcTemplate(dataSource()),
-                new DataSourceTransactionManager(dataSource()));
+        var reconnectedDataSource = dataSource();
+        var reconnected = new JdbcUploadRecordStore(new JdbcTemplate(reconnectedDataSource),
+                new DataSourceTransactionManager(reconnectedDataSource));
         assertEquals(UploadStatus.COMPLETED, reconnected.find(job).orElseThrow().status());
         assertEquals(UploadStatus.STORED, reconnected.find(failed).orElseThrow().status());
     }
