@@ -69,7 +69,7 @@ public final class S3MediaObjectStorage implements MediaObjectStorage, AutoClose
             MediaType type = MediaType.fromContentType(object.response().contentType());
             Long size = object.response().contentLength();
             if (type == null || size == null || size <= 0 || size > type.getMaxBytes()) {
-                try { object.close(); } catch (IOException ignored) { }
+                object.abort();
                 throw new StorageException(StorageFailure.STORAGE_ERROR);
             }
             return new StoredObject(object, size, type);

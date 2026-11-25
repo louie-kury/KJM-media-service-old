@@ -14,10 +14,12 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import software.amazon.awssdk.awscore.exception.AwsErrorDetails;
 import software.amazon.awssdk.core.exception.SdkClientException;
+import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import software.amazon.awssdk.services.s3.model.S3Exception;
@@ -97,6 +99,49 @@ class S3MediaObjectStorageTest {
             assertEquals(StorageFailure.INPUT_INVALID,
                     assertThrows(StorageException.class, () -> adapter.put("key", file, 1, MediaType.PNG, checksum)).getReason());
             verify(client, never()).putObject(any(PutObjectRequest.class), any(RequestBody.class));
+        }
+    }
+
+    @Test void invalidObjectMetadataAbortsWithoutClosingResponse() throws Exception {
+        record Metadata(String contentType, Long size) {}
+        for (Metadata metadata : new Metadata[]{
+                new Metadata(null, 1L),
+                new Metadata("application/octet-stream", 1L),
+                new Metadata("image/png", null),
+                new Metadata("image/png", 0L),
+                new Metadata("image/png", 10_000_001L)
+        }) {
+            @SuppressWarnings("unchecked")
+            ResponseInputStream<GetObjectResponse> response = mock(ResponseInputStream.class);
+            when(response.response()).thenReturn(GetObjectResponse.builder()
+                    .contentType(metadata.contentType()).contentLength(metadata.size()).build());
+            when(client.getObject(any(GetObjectRequest.class))).thenReturn(response);
+            try (var adapter = adapter()) {
+                StorageException error = assertThrows(StorageException.class, () -> adapter.read("key"));
+                assertEquals(StorageFailure.STORAGE_ERROR, error.getReason());
+                verify(response).abort();
+                verify(response, never()).close();
+                verify(response, never()).read();
+            }
+        }
+    }
+
+    @Test void validObjectReturnsStreamForCallerToClose() throws Exception {
+        @SuppressWarnings("unchecked")
+        ResponseInputStream<GetObjectResponse> response = mock(ResponseInputStream.class);
+        when(response.response()).thenReturn(GetObjectResponse.builder()
+                .contentType("image/png").contentLength(10_000_000L).build());
+        when(client.getObject(any(GetObjectRequest.class))).thenReturn(response);
+        try (var adapter = adapter()) {
+            try (var stored = adapter.read("key")) {
+                assertSame(response, stored.input());
+                assertEquals(MediaType.PNG, stored.type());
+                assertEquals(10_000_000L, stored.size());
+                verify(response, never()).abort();
+                verify(response, never()).close();
+            }
+            verify(response).close();
+            verify(response, never()).abort();
         }
     }
 }
