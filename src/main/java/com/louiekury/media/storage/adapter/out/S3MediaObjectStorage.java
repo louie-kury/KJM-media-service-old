@@ -27,7 +27,9 @@ public final class S3MediaObjectStorage implements MediaObjectStorage, AutoClose
         if (builder == null || bucket == null || bucket.isBlank()) throw new StorageException(StorageFailure.INPUT_INVALID);
         this.bucket = bucket;
         // 첫 요청의 결과가 불명확한 상태에서 조건부 쓰기를 자동 재시도하지 않습니다.
-        this.client = builder.overrideConfiguration(config -> config.retryStrategy(retry -> retry.maxAttempts(1))).build();
+        var config = builder.overrideConfiguration().toBuilder()
+                .retryStrategy(retry -> retry.maxAttempts(1)).build();
+        this.client = builder.overrideConfiguration(config).build();
     }
 
     @Override
