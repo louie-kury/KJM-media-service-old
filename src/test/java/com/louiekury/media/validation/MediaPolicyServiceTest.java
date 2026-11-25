@@ -54,6 +54,6 @@ class MediaPolicyServiceTest {
     }
 
     @Test void rejectsMissingUsage() {
-        assertThrows(RuntimeException.class, () -> service.getPolicy(null));
+        assertThrows(NullPointerException.class, () -> service.getPolicy(null));
     }
 }
