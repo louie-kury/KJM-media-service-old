@@ -58,6 +58,19 @@ MySQL 26.10과 로컬 S3Mock을 함께 사용한 내부 호출 테스트 1개가
 
 검사 기능은 `MediaValidationService`를 호출해 사용하며, 호출자가 입력과 임시 출력 스트림의 수명주기를 관리합니다. **검사가 실패하면 임시 출력에 일부 데이터가 남을 수 있으므로 호출자가 폐기해야 합니다.** 성공 시 검사한 내용은 제공한 출력에 기록되고 확인된 유형과 크기가 반환됩니다.
 
+## 내부 미디어 정책 조회
+
+`MediaPolicyService#getPolicy(MediaUsage)`는 사용처, 현재 첨부 최대 개수와 MIME별 파일당 최대 크기(바이트)를 반환합니다. 내부 Java 호출이며 HTTP API는 제공하지 않습니다.
+
+```java
+var policy = new MediaPolicyService().getPolicy(MediaUsage.POST_ATTACHMENT);
+// policy.usage(): POST_ATTACHMENT
+// policy.maxAttachments(): 5
+// policy.maxBytesByMimeType(): 이미지 각 10000000, video/mp4 100000000
+```
+
+반환된 MIME별 크기 맵은 수정할 수 없습니다. 사용처가 `null`이면 `NullPointerException`이 발생합니다. 허용 형식과 크기는 기존 `MediaUsage`·`MediaType`의 검사 기준을 사용하며, 건강 기록·상담은 각 3개, 회원·반려동물 프로필은 현재 연결 사진 각 1개입니다. 개수는 조회 정보이며 이 기능이 실제 첨부 개수를 제한하지는 않습니다. 프로필 사진 이력의 보관·조회·복원은 아직 제공하지 않습니다.
+
 ## 내부 저장·조회
 
 `MediaStorageService`는 호출자가 준비한 객체 키와 입력 스트림을 받습니다. 파일 검사에 성공하면 검사된 바이트의 SHA-256 체크섬을 계산해 `MediaObjectStorage` 포트에 전달하고, S3 어댑터는 조건부 저장으로 기존 객체를 덮어쓰지 않도록 요청합니다. SDK 자동 재시도는 한 번의 요청으로 제한하며, 저장 응답의 체크섬을 확인할 수 없으면 성공을 단정하지 않습니다. S3 클라이언트 빌더의 리전·자격 증명과 버킷은 호출자가 구성합니다. 테스트용 엔드포인트나 자격값을 운영 환경에 사용하지 않습니다.
