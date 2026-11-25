@@ -125,6 +125,30 @@ class MediaUploadServiceTest {
         assertEquals(attempted.get(), result);
     }
 
+    @Test void fatalErrorAfterCompletionIsNotConvertedToSuccess() {
+        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenReturn(validated);
+        AssertionError fatal = new AssertionError("fatal failure after commit");
+        AtomicReference<UUID> attempted = new AtomicReference<>();
+        doAnswer(invocation -> { attempted.set(invocation.getArgument(1)); throw fatal; })
+                .when(records).complete(eq(job), any(UUID.class), eq("photo.png"), same(validated));
+        when(records.find(job)).thenAnswer(invocation -> Optional.of(
+                new UploadJob(job, "key", uploader, usage, UploadStatus.COMPLETED, attempted.get())));
+        assertSame(fatal, assertThrows(AssertionError.class, this::upload));
+    }
+
+    @Test void fatalErrorRemainsPrimaryWhenCleanupAlsoFailed() {
+        StoredCleanupException cleanup = new StoredCleanupException(validated, new IllegalStateException());
+        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenThrow(cleanup);
+        AssertionError fatal = new AssertionError("fatal failure after commit");
+        AtomicReference<UUID> attempted = new AtomicReference<>();
+        doAnswer(invocation -> { attempted.set(invocation.getArgument(1)); throw fatal; })
+                .when(records).complete(eq(job), any(UUID.class), eq("photo.png"), same(validated));
+        when(records.find(job)).thenAnswer(invocation -> Optional.of(
+                new UploadJob(job, "key", uploader, usage, UploadStatus.COMPLETED, attempted.get())));
+        assertSame(fatal, assertThrows(AssertionError.class, this::upload));
+        assertArrayEquals(new Throwable[]{cleanup}, fatal.getSuppressed());
+    }
+
     @Test void mismatchedCompletedRecordPreservesOriginalCommitError() {
         when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenReturn(validated);
         IllegalStateException failure = new IllegalStateException("commit unknown");

@@ -16,7 +16,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Repository
-public final class JdbcUploadRecordStore implements UploadRecordStore {
+public class JdbcUploadRecordStore implements UploadRecordStore {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
 

@@ -11,9 +11,7 @@ import com.louiekury.media.validation.application.service.MediaValidationService
 import com.louiekury.media.validation.domain.MediaUsage;
 import java.io.ByteArrayInputStream;
 import java.net.URI;
-import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -30,6 +28,8 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 /** 독립 QA: 전용 로컬 MySQL과 S3Mock이 필요하며 DB에 테스트 행을 남긴다. */
 @EnabledIfEnvironmentVariable(named = "MEDIA_TEST_MYSQL_URL", matches = ".+")
@@ -69,7 +69,8 @@ class IndependentUploadQaTest {
         try (S3Client inspect = builder(endpoint).build();
              var storage = new S3MediaObjectStorage(builder(endpoint), BUCKET)) {
             try {
-                var fileStorage = new MediaStorageService(new MediaValidationService(new FileSignatureDetector()), storage);
+                var observedStorage = spy(storage);
+                var fileStorage = new MediaStorageService(new MediaValidationService(new FileSignatureDetector()), observedStorage);
                 var service = new MediaUploadService(fileStorage, records);
                 UUID media = service.upload(job, uploader, USAGE, "qa.png", "image/png", new ByteArrayInputStream(PNG));
                 assertNotNull(media);
@@ -95,10 +96,11 @@ class IndependentUploadQaTest {
                 assertThrows(NoSuchKeyException.class, () -> inspect.getObjectAsBytes(r -> r.bucket(BUCKET).key(rejected.objectKey())));
                 System.out.println("잘못된 파일: 실패 작업 보존, 완료 미디어와 S3 객체 없음");
 
-                Set<String> before = keys(inspect);
+                verify(observedStorage, times(1)).put(anyString(), any(), anyLong(), any(), anyString());
                 assertThrows(DataIntegrityViolationException.class, () -> service.upload(job, uploader, USAGE,
                         "qa.png", "image/png", new ByteArrayInputStream(PNG)));
-                assertEquals(before, keys(inspect));
+                verify(observedStorage, times(1)).put(anyString(), any(), anyLong(), any(), anyString());
+                assertArrayEquals(PNG, inspect.getObjectAsBytes(r -> r.bucket(BUCKET).key(saved.objectKey())).asByteArray());
                 assertEquals(1, count(jdbc, "SELECT COUNT(*) FROM media WHERE uuid = ?", media.toString()));
                 assertEquals(1, count(jdbc, "SELECT COUNT(*) FROM temporary_attachment t JOIN media m ON m.id = t.media_id WHERE m.uuid = ?", media.toString()));
                 System.out.println("동일 작업 재호출: 거절, 추가 DB 기록과 S3 객체 없음");
@@ -132,10 +134,6 @@ class IndependentUploadQaTest {
         return S3Client.builder().endpointOverride(endpoint).region(Region.US_EAST_1)
                 .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test")))
                 .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build());
-    }
-
-    private static Set<String> keys(S3Client client) {
-        return client.listObjectsV2Paginator(r -> r.bucket(BUCKET)).contents().stream().map(o -> o.key()).collect(Collectors.toSet());
     }
 
     private static int count(JdbcTemplate jdbc, String sql, String value) {

@@ -60,13 +60,20 @@ public final class MediaUploadService {
         try {
             records.markStored(jobId);
             records.complete(jobId, mediaId, filename, validated);
-        } catch (RuntimeException | Error error) {
+        } catch (Error error) {
+            if (cleanupError != null) error.addSuppressed(cleanupError);
+            throw error;
+        } catch (RuntimeException error) {
             boolean completed = false;
             try {
                 completed = records.find(jobId)
                         .filter(job -> job.status() == UploadStatus.COMPLETED && mediaId.equals(job.mediaId()))
                         .isPresent();
-            } catch (RuntimeException | Error lookupError) {
+            } catch (Error lookupError) {
+                lookupError.addSuppressed(error);
+                if (cleanupError != null) lookupError.addSuppressed(cleanupError);
+                throw lookupError;
+            } catch (RuntimeException lookupError) {
                 error.addSuppressed(lookupError);
             }
             if (!completed) {
