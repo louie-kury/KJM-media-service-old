@@ -25,7 +25,7 @@ public class MediaStorageService {
         this.storage = Objects.requireNonNull(storage);
     }
 
-    public void store(String key, MediaUsage usage, String filename, String contentType, InputStream input) {
+    public ValidatedMedia store(String key, MediaUsage usage, String filename, String contentType, InputStream input) {
         requireKey(key);
         if (input == null) throw new StorageException(StorageFailure.INPUT_INVALID);
         Path temporary;
@@ -34,15 +34,16 @@ public class MediaStorageService {
 
         Throwable failure = null;
         boolean stored = false;
+        ValidatedMedia validated = null;
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            ValidatedMedia validated;
             try (var output = new DigestOutputStream(Files.newOutputStream(temporary), digest)) {
                 validated = validator.validate(usage, filename, contentType, input, output);
             }
             storage.put(key, temporary, validated.getSize(), validated.getType(),
                     Base64.getEncoder().encodeToString(digest.digest()));
             stored = true;
+            return validated;
         } catch (IOException | NoSuchAlgorithmException error) {
             StorageException wrapped = new StorageException(StorageFailure.STORAGE_ERROR, error);
             failure = wrapped;
@@ -51,7 +52,12 @@ public class MediaStorageService {
             failure = error;
             throw error;
         } finally {
-            cleanupTemporary(temporary, failure, stored);
+            try {
+                cleanupTemporary(temporary, failure, stored);
+            } catch (StorageException error) {
+                if (stored) throw new StoredCleanupException(validated, error);
+                throw error;
+            }
         }
     }
 

@@ -23,6 +23,7 @@ public enum MediaType {
     }
 
     public long getMaxBytes() { return maxBytes; }
+    public String getMimeType() { return mimeType; }
 
     public static MediaType fromFilename(String filename) {
         if (filename == null) return null;
