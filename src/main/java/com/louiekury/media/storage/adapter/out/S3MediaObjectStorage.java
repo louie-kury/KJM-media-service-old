@@ -2,6 +2,7 @@ package com.louiekury.media.storage.adapter.out;
 
 import com.louiekury.media.storage.application.StorageException;
 import com.louiekury.media.storage.application.StorageFailure;
+import com.louiekury.media.storage.application.model.ObjectObservation;
 import com.louiekury.media.storage.application.model.StoredObject;
 import com.louiekury.media.storage.application.port.out.MediaObjectStorage;
 import com.louiekury.media.validation.domain.MediaType;
@@ -15,6 +16,8 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.ChecksumMode;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
@@ -85,6 +88,54 @@ public final class S3MediaObjectStorage implements MediaObjectStorage, AutoClose
         } catch (RuntimeException error) {
             throw new StorageException(StorageFailure.STORAGE_ERROR, error);
         }
+    }
+
+    @Override
+    public ObjectObservation observe(String key) {
+        requireKey(key);
+        try {
+            var response = client.headObject(HeadObjectRequest.builder().bucket(bucket).key(key)
+                    .checksumMode(ChecksumMode.ENABLED).build());
+            return observation(response.contentLength(), response.contentType(), response.checksumSHA256());
+        } catch (S3Exception error) {
+            // HEAD 404만으로는 키와 버킷 중 무엇이 없는지 알 수 없습니다.
+            if (error.statusCode() == 404) return observeAfterHeadNotFound(key);
+            throw new StorageException(StorageFailure.STORAGE_ERROR, error);
+        } catch (StorageException error) {
+            throw error;
+        } catch (RuntimeException error) {
+            throw new StorageException(StorageFailure.STORAGE_ERROR, error);
+        }
+    }
+
+    private ObjectObservation observeAfterHeadNotFound(String key) {
+        try {
+            var object = client.getObject(GetObjectRequest.builder().bucket(bucket).key(key)
+                    .checksumMode(ChecksumMode.ENABLED).build());
+            try {
+                var response = object.response();
+                return observation(response.contentLength(), response.contentType(), response.checksumSHA256());
+            } finally {
+                object.abort();
+            }
+        } catch (S3Exception error) {
+            if (error.statusCode() == 404 && error.awsErrorDetails() != null
+                    && "NoSuchKey".equals(error.awsErrorDetails().errorCode())) {
+                throw new StorageException(StorageFailure.NOT_FOUND, error);
+            }
+            throw new StorageException(StorageFailure.STORAGE_ERROR, error);
+        } catch (StorageException error) {
+            throw error;
+        } catch (RuntimeException error) {
+            throw new StorageException(StorageFailure.STORAGE_ERROR, error);
+        }
+    }
+
+    private static ObjectObservation observation(Long size, String contentType, String sha256) {
+        if (size == null || size < 0 || contentType == null || contentType.isBlank()) {
+            throw new StorageException(StorageFailure.STORAGE_ERROR);
+        }
+        return new ObjectObservation(size, contentType, sha256);
     }
 
     @Override public void close() { client.close(); }

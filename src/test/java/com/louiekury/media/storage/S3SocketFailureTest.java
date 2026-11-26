@@ -82,6 +82,32 @@ class S3SocketFailureTest {
         }
     }
 
+    @Test void realHead404ThenMissingBucketIsNotReportedAsMissingObject() throws Exception {
+        var headCount = new AtomicInteger();
+        var getCount = new AtomicInteger();
+        HttpServer server = localServer();
+        server.createContext("/", exchange -> {
+            if ("HEAD".equals(exchange.getRequestMethod())) {
+                headCount.incrementAndGet();
+                exchange.sendResponseHeaders(404, -1);
+            } else {
+                getCount.incrementAndGet();
+                byte[] body = "<Error><Code>NoSuchBucket</Code><Message>Missing bucket</Message></Error>".getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/xml");
+                exchange.sendResponseHeaders(404, body.length);
+                exchange.getResponseBody().write(body);
+            }
+            exchange.close();
+        });
+        server.start();
+        try (var adapter = storage(server.getAddress().getPort())) {
+            assertEquals(StorageFailure.STORAGE_ERROR,
+                    assertThrows(StorageException.class, () -> adapter.observe("key")).getReason());
+            assertEquals(1, headCount.get());
+            assertEquals(1, getCount.get());
+        } finally { server.stop(0); }
+    }
+
     @Test void requestBodyReceivedThenConnectionClosedIsUnknownAndNotRetried(@TempDir Path dir) throws Exception {
         var requests = new AtomicInteger();
         var received = new AtomicReference<byte[]>();
@@ -231,6 +257,7 @@ class S3SocketFailureTest {
         server.start();
         try (var adapter = storage(server.getAddress().getPort())) {
             MediaObjectStorage tracked = new MediaObjectStorage() {
+                @Override public com.louiekury.media.storage.application.model.ObjectObservation observe(String key) { return adapter.observe(key); }
                 @Override public void put(String key, Path file, long size, MediaType type, String checksum) {
                     temporary.set(file);
                     adapter.put(key, file, size, type, checksum);
