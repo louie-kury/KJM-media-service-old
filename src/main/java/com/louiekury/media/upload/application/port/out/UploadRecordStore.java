@@ -12,6 +12,7 @@ import java.util.UUID;
 
 public interface UploadRecordStore {
     void prepare(UUID jobId, String objectKey, UUID uploaderId, MediaUsage usage);
+    void recordValidated(UUID jobId, String filename, ValidatedMedia media, String sha256);
     void markUnknown(UUID jobId);
     void markStored(UUID jobId);
     void markFailed(UUID jobId);

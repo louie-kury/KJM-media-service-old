@@ -3,11 +3,14 @@ package com.louiekury.media.upload.adapter.out;
 import com.louiekury.media.upload.application.model.UploadJob;
 import com.louiekury.media.upload.application.model.PendingUploadCursor;
 import com.louiekury.media.upload.application.model.PendingUploadJob;
+import com.louiekury.media.upload.application.model.RecoveryMetadata;
 import com.louiekury.media.upload.application.model.UploadStatus;
 import com.louiekury.media.upload.application.port.out.UploadRecordStore;
 import com.louiekury.media.validation.application.model.ValidatedMedia;
 import com.louiekury.media.validation.domain.MediaUsage;
+import com.louiekury.media.validation.domain.MediaType;
 import java.util.List;
+import java.util.Base64;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -39,6 +42,34 @@ public class JdbcUploadRecordStore implements UploadRecordStore {
                 "INSERT INTO upload_job (id, object_key, uploader_uuid, usage_name, status, created_at, updated_at) "
                         + "VALUES (?, ?, ?, ?, 'PREPARED', UTC_TIMESTAMP(), UTC_TIMESTAMP())",
                 jobId.toString(), objectKey, uploaderId.toString(), usage.name()));
+    }
+
+    @Override
+    public void recordValidated(UUID jobId, String filename, ValidatedMedia media, String sha256) {
+        Objects.requireNonNull(jobId, "jobId");
+        if (filename == null || filename.isBlank() || filename.codePointCount(0, filename.length()) > 255
+                || media == null || media.getType() == null || media.getSize() <= 0
+                || media.getSize() > media.getType().getMaxBytes() || !isSha256(sha256)) {
+            throw new IllegalArgumentException("Invalid validated media metadata");
+        }
+        transaction.executeWithoutResult(status -> {
+            int count = jdbc.update("UPDATE upload_job SET validated_filename = ?, validated_content_type = ?, "
+                            + "validated_size = ?, validated_sha256 = ?, updated_at = UTC_TIMESTAMP() "
+                            + "WHERE id = ? AND status = 'PREPARED' AND validated_filename IS NULL "
+                            + "AND validated_content_type IS NULL AND validated_size IS NULL AND validated_sha256 IS NULL",
+                    filename, media.getType().getMimeType(), media.getSize(), sha256, jobId.toString());
+            if (count != 1) throw new IllegalStateException("Upload job cannot accept validated metadata");
+        });
+    }
+
+    private static boolean isSha256(String value) {
+        if (value == null) return false;
+        try {
+            byte[] decoded = Base64.getDecoder().decode(value);
+            return decoded.length == 32 && Base64.getEncoder().encodeToString(decoded).equals(value);
+        } catch (IllegalArgumentException error) {
+            return false;
+        }
     }
 
     @Override public void markUnknown(UUID jobId) { transition(jobId, "OUTCOME_UNKNOWN"); }
@@ -73,7 +104,8 @@ public class JdbcUploadRecordStore implements UploadRecordStore {
 
     @Override
     public Optional<UploadJob> find(UUID jobId) {
-        List<UploadJob> jobs = jdbc.query("SELECT id, object_key, uploader_uuid, usage_name, status, media_uuid "
+        List<UploadJob> jobs = jdbc.query("SELECT id, object_key, uploader_uuid, usage_name, status, media_uuid, "
+                        + "validated_filename, validated_content_type, validated_size, validated_sha256 "
                         + "FROM upload_job WHERE id = ?", (rs, row) -> mapJob(rs),
                 jobId.toString());
         return jobs.stream().findFirst();
@@ -83,7 +115,8 @@ public class JdbcUploadRecordStore implements UploadRecordStore {
     public List<PendingUploadJob> findPending(Instant cutoff, PendingUploadCursor cursor, int limit) {
         Objects.requireNonNull(cutoff, "cutoff");
         if (limit < 1 || limit > 100) throw new IllegalArgumentException("limit must be between 1 and 100");
-        String sql = "SELECT id, object_key, uploader_uuid, usage_name, status, media_uuid, updated_at "
+        String sql = "SELECT id, object_key, uploader_uuid, usage_name, status, media_uuid, updated_at, "
+                + "validated_filename, validated_content_type, validated_size, validated_sha256 "
                 + "FROM upload_job WHERE status IN ('PREPARED', 'OUTCOME_UNKNOWN', 'STORED') AND updated_at <= ? ";
         if (cursor == null) {
             return jdbc.query(sql + "ORDER BY updated_at, id LIMIT ?", (rs, row) ->
@@ -99,8 +132,12 @@ public class JdbcUploadRecordStore implements UploadRecordStore {
 
     private static UploadJob mapJob(ResultSet rs) throws SQLException {
         String mediaId = rs.getString("media_uuid");
+        String filename = rs.getString("validated_filename");
+        RecoveryMetadata metadata = filename == null ? null : new RecoveryMetadata(filename,
+                Objects.requireNonNull(MediaType.fromContentType(rs.getString("validated_content_type"))),
+                rs.getLong("validated_size"), rs.getString("validated_sha256"));
         return new UploadJob(UUID.fromString(rs.getString("id")), rs.getString("object_key"),
                 UUID.fromString(rs.getString("uploader_uuid")), MediaUsage.valueOf(rs.getString("usage_name")),
-                UploadStatus.valueOf(rs.getString("status")), mediaId == null ? null : UUID.fromString(mediaId));
+                UploadStatus.valueOf(rs.getString("status")), mediaId == null ? null : UUID.fromString(mediaId), metadata);
     }
 }

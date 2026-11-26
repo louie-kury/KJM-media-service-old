@@ -41,7 +41,18 @@ public final class MediaUploadService {
         ValidatedMedia validated;
         StoredCleanupException cleanupError = null;
         try {
-            validated = storage.store(key, usage, filename, contentType, input);
+            validated = storage.store(key, usage, filename, contentType, input, (media, checksum) -> {
+                try {
+                    records.recordValidated(jobId, filename, media, checksum);
+                } catch (RuntimeException | Error error) {
+                    throw new MetadataRecordException(error);
+                }
+            });
+        } catch (MetadataRecordException error) {
+            Throwable cause = error.getCause();
+            for (Throwable suppressed : error.getSuppressed()) cause.addSuppressed(suppressed);
+            if (cause instanceof Error fatal) throw fatal;
+            throw (RuntimeException) cause;
         } catch (StoredCleanupException error) {
             validated = error.getMedia();
             cleanupError = error;
@@ -92,5 +103,9 @@ public final class MediaUploadService {
         } catch (RuntimeException error) {
             original.addSuppressed(error);
         }
+    }
+
+    private static final class MetadataRecordException extends RuntimeException {
+        private MetadataRecordException(Throwable cause) { super(cause); }
     }
 }
