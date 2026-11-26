@@ -40,6 +40,12 @@ $env:MEDIA_TEST_MYSQL_PASSWORD = '<전용 테스트 비밀번호>'
 
 `MEDIA_TEST_MYSQL_URL`이 없으면 이 테스트는 건너뜁니다. 비밀번호는 실제 환경에서 설정하고 저장소에 기록하지 마세요. MySQL 26.10의 새 빈 테스트 DB에 Flyway V1이 적용됐고, 이후 제약·롤백·동시 완료와 완료 트랜잭션 커밋 전후 예외 주입을 포함한 통합 테스트 2개가 건너뜀 없이 통과했습니다. 실제 네트워크 응답 유실은 재현하지 않았습니다. Flyway는 검증된 MySQL 지원 버전이 9.4까지라는 경고를 출력했습니다. 사용자가 DB 서버 재시작 전후 `media`·`upload_job`·`temporary_attachment`의 행 수가 각각 5·8·5로 같음을 확인했습니다. 개별 행 내용은 비교하지 않았습니다.
 
+미완료 업로드 조회 테스트는 같은 MySQL 설정을 사용하되 테스트마다 `media_test_pending_`과 임의 ID로 새 스키마를 만들고 종료 시 삭제합니다. 전용 테스트 계정에 해당 이름의 스키마 생성·삭제와 마이그레이션 권한이 필요합니다. 기존 스키마를 지우지 않으며, 프로세스가 강제 종료되면 임시 스키마가 남을 수 있습니다.
+
+```powershell
+.\gradlew.bat test --tests '*MySqlPendingUploadQueryIntegrationTest' --rerun-tasks
+```
+
 내부 업로드 흐름을 확인하려면 위 MySQL 설정과 앞서 설명한 로컬 S3Mock·`codex-media-test` 버킷을 함께 준비하고 실행합니다. DB 테스트 행은 남습니다.
 
 ```powershell
