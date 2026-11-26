@@ -133,7 +133,7 @@ class MySqlUploadRecordIntegrationTest {
             assertEquals(commitApplied ? UploadStatus.COMPLETED : UploadStatus.STORED, persisted.status());
             assertEquals(commitApplied ? 1 : 0, count(jdbc, "SELECT COUNT(*) FROM media WHERE object_key = ?", persisted.objectKey()));
             assertEquals(commitApplied ? 1 : 0, count(jdbc, "SELECT COUNT(*) FROM temporary_attachment t JOIN media m ON t.media_id = m.id WHERE m.object_key = ?", persisted.objectKey()));
-            verify(storage, times(1)).store(eq(persisted.objectKey()), any(), anyString(), anyString(), any());
+            verify(storage, times(1)).store(eq(persisted.objectKey()), any(), anyString(), anyString(), any(), any());
         }
     }
 
