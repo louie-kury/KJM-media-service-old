@@ -37,14 +37,14 @@ class MediaUploadServiceTest {
     private UUID upload() { return service.upload(job, uploader, usage, "photo.png", "image/png", input); }
 
     @Test void preparesBeforeStorageAndCompletesWithValidatedMetadata() {
-        when(storage.store(anyString(), eq(usage), eq("photo.png"), eq("image/png"), same(input)))
+        when(storage.store(anyString(), eq(usage), eq("photo.png"), eq("image/png"), same(input), any()))
                 .thenReturn(validated);
         UUID media = upload();
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         InOrder order = inOrder(records, storage);
         order.verify(records).prepare(eq(job), key.capture(), eq(uploader), eq(usage));
         assertDoesNotThrow(() -> UUID.fromString(key.getValue()));
-        order.verify(storage).store(eq(key.getValue()), eq(usage), eq("photo.png"), eq("image/png"), same(input));
+        order.verify(storage).store(eq(key.getValue()), eq(usage), eq("photo.png"), eq("image/png"), same(input), any());
         order.verify(records).markStored(job);
         order.verify(records).complete(job, media, "photo.png", validated);
     }
@@ -59,7 +59,7 @@ class MediaUploadServiceTest {
 
     @Test void unknownStorageOutcomeIsPreservedWithoutCompletion() {
         StorageException failure = new StorageException(StorageFailure.OUTCOME_UNKNOWN);
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenThrow(failure);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenThrow(failure);
         assertSame(failure, assertThrows(StorageException.class, this::upload));
         verify(records).markUnknown(job);
         verify(records, never()).complete(any(), any(), any(), any());
@@ -67,7 +67,7 @@ class MediaUploadServiceTest {
 
     @Test void invalidFileEndsWorkWithoutCreatingMedia() {
         MediaValidationException failure = new MediaValidationException(ValidationFailure.EMPTY_FILE);
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenThrow(failure);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenThrow(failure);
         assertSame(failure, assertThrows(MediaValidationException.class, this::upload));
         verify(records).markFailed(job);
         verify(records, never()).complete(any(), any(), any(), any());
@@ -75,7 +75,7 @@ class MediaUploadServiceTest {
 
     @Test void failedUnknownStateUpdateDoesNotHideOriginalFailure() {
         StorageException failure = new StorageException(StorageFailure.OUTCOME_UNKNOWN);
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenThrow(failure);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenThrow(failure);
         doThrow(new IllegalStateException("database unavailable")).when(records).markUnknown(job);
         assertSame(failure, assertThrows(StorageException.class, this::upload));
         assertEquals(1, failure.getSuppressed().length);
@@ -84,7 +84,7 @@ class MediaUploadServiceTest {
 
     @Test void confirmedStorageWithCleanupFailureStillRecordsCompletion() {
         StoredCleanupException failure = new StoredCleanupException(validated, new IllegalStateException());
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenThrow(failure);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenThrow(failure);
         assertSame(failure, assertThrows(StoredCleanupException.class, this::upload));
         InOrder order = inOrder(records);
         order.verify(records).markStored(job);
@@ -93,20 +93,20 @@ class MediaUploadServiceTest {
     }
 
     @Test void failureMarkingStoredNeverReportsCompletion() {
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenReturn(validated);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenReturn(validated);
         doThrow(new IllegalStateException("database unavailable")).when(records).markStored(job);
         assertThrows(IllegalStateException.class, this::upload);
         verify(records, never()).complete(any(), any(), any(), any());
     }
 
     @Test void uncertainCompletionCommitDoesNotReturnSuccessOrStartAnotherUpload() {
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenReturn(validated);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenReturn(validated);
         IllegalStateException commitFailure = new IllegalStateException("commit result unknown");
         doThrow(commitFailure).when(records).complete(eq(job), any(UUID.class), eq("photo.png"), same(validated));
         assertSame(commitFailure, assertThrows(IllegalStateException.class, this::upload));
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         verify(records, times(1)).prepare(eq(job), key.capture(), eq(uploader), eq(usage));
-        verify(storage, times(1)).store(eq(key.getValue()), eq(usage), eq("photo.png"), eq("image/png"), same(input));
+        verify(storage, times(1)).store(eq(key.getValue()), eq(usage), eq("photo.png"), eq("image/png"), same(input), any());
         verify(records).markStored(job);
         verify(records).find(job);
         verify(records, never()).markFailed(job);
@@ -114,7 +114,7 @@ class MediaUploadServiceTest {
     }
 
     @Test void uncertainCommitReturnsMediaIdOnlyWhenCompletedRecordMatches() {
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenReturn(validated);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenReturn(validated);
         AtomicReference<UUID> attempted = new AtomicReference<>();
         doAnswer(invocation -> { attempted.set(invocation.getArgument(1)); throw new IllegalStateException("lost response"); })
                 .when(records).complete(eq(job), any(UUID.class), eq("photo.png"), same(validated));
@@ -126,7 +126,7 @@ class MediaUploadServiceTest {
     }
 
     @Test void fatalErrorAfterCompletionIsNotConvertedToSuccess() {
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenReturn(validated);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenReturn(validated);
         AssertionError fatal = new AssertionError("fatal failure after commit");
         AtomicReference<UUID> attempted = new AtomicReference<>();
         doAnswer(invocation -> { attempted.set(invocation.getArgument(1)); throw fatal; })
@@ -138,7 +138,7 @@ class MediaUploadServiceTest {
 
     @Test void fatalErrorRemainsPrimaryWhenCleanupAlsoFailed() {
         StoredCleanupException cleanup = new StoredCleanupException(validated, new IllegalStateException());
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenThrow(cleanup);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenThrow(cleanup);
         AssertionError fatal = new AssertionError("fatal failure after commit");
         AtomicReference<UUID> attempted = new AtomicReference<>();
         doAnswer(invocation -> { attempted.set(invocation.getArgument(1)); throw fatal; })
@@ -150,7 +150,7 @@ class MediaUploadServiceTest {
     }
 
     @Test void mismatchedCompletedRecordPreservesOriginalCommitError() {
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenReturn(validated);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenReturn(validated);
         IllegalStateException failure = new IllegalStateException("commit unknown");
         doThrow(failure).when(records).complete(eq(job), any(UUID.class), eq("photo.png"), same(validated));
         when(records.find(job)).thenReturn(Optional.of(new UploadJob(job, "key", uploader, usage,
@@ -159,7 +159,7 @@ class MediaUploadServiceTest {
     }
 
     @Test void storedButNotCompletedRecordPreservesOriginalCommitError() {
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenReturn(validated);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenReturn(validated);
         IllegalStateException failure = new IllegalStateException("commit failed");
         doThrow(failure).when(records).complete(eq(job), any(UUID.class), eq("photo.png"), same(validated));
         when(records.find(job)).thenReturn(Optional.of(new UploadJob(job, "key", uploader, usage, UploadStatus.STORED, null)));
@@ -167,7 +167,7 @@ class MediaUploadServiceTest {
     }
 
     @Test void failedReconciliationPreservesCommitAndLookupErrors() {
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenReturn(validated);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenReturn(validated);
         IllegalStateException failure = new IllegalStateException("commit unknown");
         IllegalArgumentException lookup = new IllegalArgumentException("lookup unavailable");
         doThrow(failure).when(records).complete(eq(job), any(UUID.class), eq("photo.png"), same(validated));
@@ -178,7 +178,7 @@ class MediaUploadServiceTest {
 
     @Test void cleanupFailureIsStillReportedWhenCommitWasConfirmed() {
         StoredCleanupException cleanup = new StoredCleanupException(validated, new IllegalStateException());
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenThrow(cleanup);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenThrow(cleanup);
         AtomicReference<UUID> attempted = new AtomicReference<>();
         doAnswer(invocation -> { attempted.set(invocation.getArgument(1)); throw new IllegalStateException("lost response"); })
                 .when(records).complete(eq(job), any(UUID.class), eq("photo.png"), same(validated));
@@ -189,7 +189,7 @@ class MediaUploadServiceTest {
 
     @Test void cleanupFailureIsSuppressedWhenCommitCannotBeConfirmed() {
         StoredCleanupException cleanup = new StoredCleanupException(validated, new IllegalStateException());
-        when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenThrow(cleanup);
+        when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenThrow(cleanup);
         IllegalStateException failure = new IllegalStateException("commit unknown");
         doThrow(failure).when(records).complete(eq(job), any(UUID.class), eq("photo.png"), same(validated));
         assertSame(failure, assertThrows(IllegalStateException.class, this::upload));
@@ -198,7 +198,7 @@ class MediaUploadServiceTest {
 
     @Test void filenameOf255CharactersIsAccepted() {
         String filename = "가".repeat(251) + ".png";
-        when(storage.store(anyString(), eq(usage), eq(filename), eq("image/png"), same(input)))
+        when(storage.store(anyString(), eq(usage), eq(filename), eq("image/png"), same(input), any()))
                 .thenReturn(validated);
         UUID media = service.upload(job, uploader, usage, filename, "image/png", input);
         verify(records).complete(job, media, filename, validated);

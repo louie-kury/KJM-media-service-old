@@ -2,6 +2,10 @@ package com.louiekury.media.upload;
 
 import com.louiekury.media.storage.adapter.out.S3MediaObjectStorage;
 import com.louiekury.media.storage.application.MediaStorageService;
+import com.louiekury.media.storage.application.StorageException;
+import com.louiekury.media.storage.application.StorageFailure;
+import com.louiekury.media.storage.application.model.StoredObject;
+import com.louiekury.media.storage.application.port.out.MediaObjectStorage;
 import com.louiekury.media.upload.adapter.out.JdbcUploadRecordStore;
 import com.louiekury.media.upload.application.MediaUploadService;
 import com.louiekury.media.upload.application.model.UploadStatus;
@@ -9,8 +13,12 @@ import com.louiekury.media.validation.adapter.out.FileSignatureDetector;
 import com.louiekury.media.validation.application.service.MediaValidationException;
 import com.louiekury.media.validation.application.service.MediaValidationService;
 import com.louiekury.media.validation.domain.MediaUsage;
+import com.louiekury.media.validation.domain.MediaType;
 import java.io.ByteArrayInputStream;
 import java.net.URI;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.Base64;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
@@ -87,6 +95,47 @@ class MediaUploadInternalIntegrationTest {
                     String key = ownedKey;
                     cleanup.deleteObject(request -> request.bucket(BUCKET).key(key));
                 }
+            }
+        }
+    }
+
+    @Test void metadataIsCommittedBeforePutAndSurvivesLostResponse() throws Exception {
+        String endpoint = System.getenv("MEDIA_TEST_S3_ENDPOINT");
+        assumeTrue(endpoint != null && !endpoint.isBlank(), "로컬 S3Mock 주소가 필요합니다");
+        var dataSource = MySqlUploadRecordIntegrationTest.dataSource();
+        Flyway.configure().dataSource(dataSource).load().migrate();
+        var records = new JdbcUploadRecordStore(new JdbcTemplate(dataSource), new DataSourceTransactionManager(dataSource));
+        UUID job = UUID.randomUUID();
+        String expected = Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256").digest(PNG));
+        try (S3Client cleanup = localBuilder(endpoint).build();
+             var remote = new S3MediaObjectStorage(localBuilder(endpoint), BUCKET)) {
+            MediaObjectStorage interrupted = new MediaObjectStorage() {
+                @Override public void put(String key, Path file, long size, MediaType type, String checksum) {
+                    var saved = records.find(job).orElseThrow().recoveryMetadata();
+                    assertNotNull(saved, "메타데이터는 S3 요청 전에 다른 연결에서도 조회되어야 합니다");
+                    assertEquals("photo.png", saved.filename());
+                    assertEquals(size, saved.size());
+                    assertEquals(type, saved.type());
+                    assertEquals(expected, saved.sha256());
+                    assertEquals(expected, checksum);
+                    remote.put(key, file, size, type, checksum);
+                    throw new StorageException(StorageFailure.OUTCOME_UNKNOWN);
+                }
+                @Override public StoredObject read(String key) { return remote.read(key); }
+            };
+            var service = new MediaUploadService(new MediaStorageService(
+                    new MediaValidationService(new FileSignatureDetector()), interrupted), records);
+            try {
+                var error = assertThrows(StorageException.class, () -> service.upload(job, UUID.randomUUID(),
+                        MediaUsage.POST_ATTACHMENT, "photo.png", "image/png", new ByteArrayInputStream(PNG)));
+                assertEquals(StorageFailure.OUTCOME_UNKNOWN, error.getReason());
+                var saved = records.find(job).orElseThrow();
+                assertEquals(UploadStatus.OUTCOME_UNKNOWN, saved.status());
+                assertNull(saved.mediaId());
+                assertEquals(expected, saved.recoveryMetadata().sha256());
+                assertArrayEquals(PNG, cleanup.getObjectAsBytes(request -> request.bucket(BUCKET).key(saved.objectKey())).asByteArray());
+            } finally {
+                records.find(job).ifPresent(saved -> cleanup.deleteObject(request -> request.bucket(BUCKET).key(saved.objectKey())));
             }
         }
     }

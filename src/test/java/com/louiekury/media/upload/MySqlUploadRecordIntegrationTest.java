@@ -116,7 +116,7 @@ class MySqlUploadRecordIntegrationTest {
             var manager = new CompletionCommitFailure(new DataSourceTransactionManager(dataSource), commitApplied);
             var records = new JdbcUploadRecordStore(jdbc, manager);
             var storage = mock(MediaStorageService.class);
-            when(storage.store(anyString(), any(), anyString(), anyString(), any())).thenReturn(PNG);
+            when(storage.store(anyString(), any(), anyString(), anyString(), any(), any())).thenReturn(PNG);
             var service = new MediaUploadService(storage, records);
             UUID job = UUID.randomUUID();
             UUID uploader = UUID.randomUUID();

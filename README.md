@@ -46,6 +46,12 @@ $env:MEDIA_TEST_MYSQL_PASSWORD = '<전용 테스트 비밀번호>'
 .\gradlew.bat test --tests '*MySqlPendingUploadQueryIntegrationTest' --rerun-tasks
 ```
 
+업로드 복구 정보의 마이그레이션·기록 검증도 동일한 MySQL 설정을 사용합니다. 테스트마다 `media_test_recovery_`로 시작하는 임시 스키마를 만들고 종료 시 삭제하므로 전용 계정에 스키마 생성·삭제 권한이 필요합니다. 강제 종료 시 임시 스키마가 남을 수 있습니다.
+
+```powershell
+.\gradlew.bat test --tests '*MySqlRecoveryMetadataIntegrationTest' --rerun-tasks
+```
+
 내부 업로드 흐름을 확인하려면 위 MySQL 설정과 앞서 설명한 로컬 S3Mock·`codex-media-test` 버킷을 함께 준비하고 실행합니다. DB 테스트 행은 남습니다.
 
 ```powershell
@@ -88,6 +94,10 @@ var policy = new MediaPolicyService().getPolicy(MediaUsage.POST_ATTACHMENT);
 ## 내부 업로드 기록
 
 `MediaUploadService`는 내부 호출을 위한 기능입니다. 새 객체 키와 업로드 작업을 DB에 기록한 후 파일을 검사·저장합니다. 저장이 확인되면 검증된 유형·실제 크기를 사용해 `media`와 `temporary_attachment`를 기록하고 작업을 완료 상태로 바꿉니다. 세 변경은 하나의 DB 트랜잭션에서 처리합니다. 저장 호출은 DB 트랜잭션 밖에서 수행합니다.
+
+파일 검사가 끝나면 S3 저장 요청 전에 파일명, 검증된 유형, 실제 크기와 Base64 인코딩한 SHA-256을 `upload_job`에 기록합니다. 이 기록이 실패하거나 결과를 확인하지 못하면 S3 저장을 시작하지 않고 오류를 전달합니다. 정보는 `PREPARED` 작업에 한 번만 함께 기록하며, 단건 및 미완료 작업 내부 조회에서 확인할 수 있습니다. V2 마이그레이션 이전에 생성된 작업은 해당 정보가 없을 수 있습니다.
+
+이 정보는 향후 복구를 위한 참고 자료입니다. 정보가 있다는 사실만으로 S3 객체의 존재·일치나 쓰기 종료를 보장하지 않으며, 자동 복구·선점·정리는 수행하지 않습니다.
 
 작업 상태는 `PREPARED`, `OUTCOME_UNKNOWN`, `STORED`, `FAILED`, `COMPLETED`로 기록합니다. 저장 결과가 불명확하거나 저장 후 기록이 실패하면 작업 기록이 남을 수 있습니다. `PREPARED` 상태가 남았다고 파일이 저장되지 않았다고 단정할 수 없습니다. 저장 성공 뒤 임시 파일 정리가 실패하면 완료 기록을 시도하고 정리 오류를 호출자에게 전달합니다.
 

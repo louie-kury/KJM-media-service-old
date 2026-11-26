@@ -14,6 +14,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.Objects;
+import java.util.function.BiConsumer;
 
 /** 외부 API가 아닌 내부 저장 기능입니다. 입력 스트림은 호출자가 닫습니다. */
 public class MediaStorageService {
@@ -26,7 +27,13 @@ public class MediaStorageService {
     }
 
     public ValidatedMedia store(String key, MediaUsage usage, String filename, String contentType, InputStream input) {
+        return store(key, usage, filename, contentType, input, (media, checksum) -> { });
+    }
+
+    public ValidatedMedia store(String key, MediaUsage usage, String filename, String contentType, InputStream input,
+                                BiConsumer<ValidatedMedia, String> beforePut) {
         requireKey(key);
+        Objects.requireNonNull(beforePut);
         if (input == null) throw new StorageException(StorageFailure.INPUT_INVALID);
         Path temporary;
         try { temporary = Files.createTempFile("media-storage-", ".tmp"); }
@@ -40,8 +47,9 @@ public class MediaStorageService {
             try (var output = new DigestOutputStream(Files.newOutputStream(temporary), digest)) {
                 validated = validator.validate(usage, filename, contentType, input, output);
             }
-            storage.put(key, temporary, validated.getSize(), validated.getType(),
-                    Base64.getEncoder().encodeToString(digest.digest()));
+            String checksum = Base64.getEncoder().encodeToString(digest.digest());
+            beforePut.accept(validated, checksum);
+            storage.put(key, temporary, validated.getSize(), validated.getType(), checksum);
             stored = true;
             return validated;
         } catch (IOException | NoSuchAlgorithmException error) {
