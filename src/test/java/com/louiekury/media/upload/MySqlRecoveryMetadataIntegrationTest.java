@@ -5,6 +5,8 @@ import com.louiekury.media.upload.application.model.UploadStatus;
 import com.louiekury.media.validation.application.model.ValidatedMedia;
 import com.louiekury.media.validation.domain.MediaType;
 import com.louiekury.media.validation.domain.MediaUsage;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -47,6 +49,11 @@ class MySqlRecoveryMetadataIntegrationTest {
             assertEquals(MediaType.PNG, metadata.type());
             assertEquals(123, metadata.size());
             assertEquals(DIGEST, metadata.sha256());
+            var cutoff = jdbc.queryForObject("SELECT UTC_TIMESTAMP()", LocalDateTime.class).toInstant(ZoneOffset.UTC);
+            var pending = store.findPending(cutoff, null, 100);
+            assertEquals(1, pending.size());
+            assertEquals(legacy, pending.get(0).job().id());
+            assertEquals(metadata, pending.get(0).job().recoveryMetadata());
             assertThrows(RuntimeException.class, () -> store.recordValidated(legacy, "other.png", PNG, DIGEST));
             assertEquals(metadata, store.find(legacy).orElseThrow().recoveryMetadata());
 
