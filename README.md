@@ -89,6 +89,22 @@ var policy = new MediaPolicyService().getPolicy(MediaUsage.POST_ATTACHMENT);
 
 이 기능은 자동 복구나 정리 작업을 제공하지 않습니다. 내부 서비스와 S3 클라이언트의 운영용 연결 구성도 아직 제공하지 않으며, 테스트 대역의 결과는 실제 MySQL이나 AWS S3 연동 검증을 뜻하지 않습니다.
 
+## 미완료 업로드 작업 조회
+
+`UploadRecordStore.findPending(cutoff, cursor, limit)`은 기준 시각 이하에 갱신된 `PREPARED`, `OUTCOME_UNKNOWN`, `STORED` 작업을 내부적으로 조회합니다. `cutoff`는 `Instant`, `limit`은 1~100이며 첫 페이지의 `cursor`는 `null`입니다. 결과는 갱신 시각과 작업 ID 오름차순이며, 다음 페이지에는 마지막 결과의 시각과 ID로 커서를 만듭니다.
+
+```java
+var page = records.findPending(cutoff, null, 100);
+if (!page.isEmpty()) {
+    var last = page.get(page.size() - 1);
+    var cursor = new PendingUploadCursor(last.updatedAt(), last.job().id());
+    var nextPage = records.findPending(cutoff, cursor, 100);
+}
+```
+
+결과는 조회 시점의 후보이며 조회 중 상태가 바뀔 수 있습니다. 선점·복구·삭제가 가능한지 보장하지 않고, 전체 순회 중 변경된 작업은 다음 순회에서 다시 확인해야 합니다. `PREPARED`나 `OUTCOME_UNKNOWN`은 실제 객체가 없다는 뜻이 아닙니다. 이 조회는 HTTP API나 자동 복구 기능을 제공하지 않습니다.
+
+새로 기록하거나 갱신하는 업로드 작업과 새 미디어·임시 첨부의 시각은 UTC 기준으로 저장합니다. 이전에 저장된 `DATETIME` 값은 당시 DB 세션 시간대를 따르므로 시간대가 불명확할 수 있고 자동 변환되지 않습니다. 기존 데이터를 시간 기준으로 조회하기 전 실제 저장 당시 시간대를 확인해야 합니다.
 ## 현재 한계
 
 - 파일 앞부분의 식별 정보 검사로 형식을 추정합니다. MP4는 `ffprobe`로 표지 이미지가 아닌 영상 스트림을 확인합니다. 파일 전체의 무결성, 재생 가능 여부나 악성 코드가 없음을 보장하지 않습니다. MP4의 `ftyp` 상자는 앞 4,096바이트 안에 있어야 합니다.
