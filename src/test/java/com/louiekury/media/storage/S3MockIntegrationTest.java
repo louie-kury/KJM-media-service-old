@@ -142,4 +142,26 @@ class S3MockIntegrationTest {
             }
         }
     }
+
+    @Test void observesStoredMetadataAndDistinguishesMissingKey() throws Exception {
+        String prefix = "integration-test/" + UUID.randomUUID() + "/";
+        String key = prefix + "observation.png";
+        try (S3Client direct = localBuilder().build();
+             var storage = new S3MediaObjectStorage(localBuilder(), BUCKET)) {
+            var service = new MediaStorageService(new MediaValidationService(new FileSignatureDetector()), storage);
+            try {
+                service.store(key, MediaUsage.POST_ATTACHMENT, "photo.png", "image/png", new ByteArrayInputStream(PNG));
+                var observed = storage.observe(key);
+                assertEquals(PNG.length, observed.size());
+                assertEquals("image/png", observed.contentType());
+                if (observed.sha256() != null) {
+                    String expected = java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(PNG));
+                    assertEquals(expected, observed.sha256());
+                }
+                assertArrayEquals(PNG, direct.getObjectAsBytes(request -> request.bucket(BUCKET).key(key)).asByteArray());
+                var missing = assertThrows(StorageException.class, () -> storage.observe(prefix + "missing.png"));
+                assertEquals(StorageFailure.NOT_FOUND, missing.getReason());
+            } finally { direct.deleteObject(request -> request.bucket(BUCKET).key(key)); }
+        }
+    }
 }

@@ -110,6 +110,7 @@ class MediaUploadInternalIntegrationTest {
         try (S3Client cleanup = localBuilder(endpoint).build();
              var remote = new S3MediaObjectStorage(localBuilder(endpoint), BUCKET)) {
             MediaObjectStorage interrupted = new MediaObjectStorage() {
+                @Override public com.louiekury.media.storage.application.model.ObjectObservation observe(String key) { return remote.observe(key); }
                 @Override public void put(String key, Path file, long size, MediaType type, String checksum) {
                     var saved = records.find(job).orElseThrow().recoveryMetadata();
                     assertNotNull(saved, "메타데이터는 S3 요청 전에 다른 연결에서도 조회되어야 합니다");

@@ -114,6 +114,7 @@ class MediaStorageServiceTest {
     }
 
     private static final class RecordingStorage implements MediaObjectStorage {
+        @Override public com.louiekury.media.storage.application.model.ObjectObservation observe(String key) { throw new UnsupportedOperationException(); }
         int putCalls;
         String key, checksum, readKey;
         Path path;
