@@ -9,8 +9,18 @@ import com.louiekury.media.validation.application.service.MediaValidationService
 import com.louiekury.media.validation.domain.MediaType;
 import com.louiekury.media.validation.domain.MediaUsage;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -35,9 +45,73 @@ class S3MockIntegrationTest {
                 endpoint.getFragment() != null || !(endpoint.getPath().isEmpty() || "/".equals(endpoint.getPath()))) {
             throw new IllegalArgumentException("S3Mock test requires an explicit local HTTP endpoint");
         }
+        return builder(endpoint);
+    }
+
+    private S3ClientBuilder builder(URI endpoint) {
         return S3Client.builder().endpointOverride(endpoint).region(Region.US_EAST_1)
                 .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test")))
                 .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build());
+    }
+
+    @Test void storedObjectSurvivesLostResponseWithoutRetry() throws Exception {
+        URI upstream = URI.create(System.getenv("MEDIA_TEST_S3_ENDPOINT"));
+        // Validate before making any request, including the independent verification and cleanup.
+        var validatedBuilder = localBuilder();
+        String key = "integration-test/" + UUID.randomUUID() + "/lost-response.png";
+        var requests = new AtomicInteger();
+        try (S3Client direct = validatedBuilder.build();
+             ServerSocket proxy = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            proxy.setSoTimeout(5000);
+            var observedStatus = CompletableFuture.supplyAsync(() -> {
+                try (Socket incoming = proxy.accept(); Socket target = new Socket(upstream.getHost(), upstream.getPort())) {
+                    requests.incrementAndGet();
+                    target.setSoTimeout(5000);
+                    var forward = CompletableFuture.runAsync(() -> {
+                        try { incoming.getInputStream().transferTo(target.getOutputStream()); }
+                        catch (IOException ignored) { /* both sockets are closed after the response arrives */ }
+                    });
+                    var header = new ByteArrayOutputStream();
+                    int match = 0;
+                    byte[] end = {'\r', '\n', '\r', '\n'};
+                    while (match < end.length) {
+                        int next = target.getInputStream().read();
+                        if (next < 0 || header.size() > 16_384) throw new IOException("incomplete S3Mock response");
+                        header.write(next);
+                        match = next == end[match] ? match + 1 : (next == end[0] ? 1 : 0);
+                    }
+                    String result = header.toString(StandardCharsets.US_ASCII);
+                    incoming.setSoLinger(true, 0);
+                    incoming.close();
+                    target.close();
+                    forward.get(5, TimeUnit.SECONDS);
+                    proxy.setSoTimeout(1000);
+                    try (Socket unexpected = proxy.accept()) { requests.incrementAndGet(); }
+                    catch (SocketTimeoutException expected) { /* no SDK retry */ }
+                    return result;
+                } catch (Exception error) { throw new IllegalStateException(error); }
+            });
+            try {
+                URI faultEndpoint = URI.create("http://127.0.0.1:" + proxy.getLocalPort());
+                try (var storage = new S3MediaObjectStorage(builder(faultEndpoint), BUCKET)) {
+                    var service = new MediaStorageService(new MediaValidationService(new FileSignatureDetector()), storage);
+                    var failure = assertThrows(StorageException.class, () -> service.store(key, MediaUsage.POST_ATTACHMENT,
+                            "photo.png", "image/png", new ByteArrayInputStream(PNG)));
+                    assertEquals(StorageFailure.OUTCOME_UNKNOWN, failure.getReason());
+                }
+                String response = observedStatus.get(8, TimeUnit.SECONDS);
+                assertTrue(response.startsWith("HTTP/1.1 200") || response.startsWith("HTTP/1.0 200"), response);
+                assertEquals(1, requests.get());
+                var object = direct.getObjectAsBytes(request -> request.bucket(BUCKET).key(key));
+                assertArrayEquals(PNG, object.asByteArray());
+                assertEquals("image/png", object.response().contentType());
+            } finally {
+                direct.deleteObject(request -> request.bucket(BUCKET).key(key));
+            }
+            var removed = assertThrows(software.amazon.awssdk.services.s3.model.S3Exception.class,
+                    () -> direct.getObjectAsBytes(request -> request.bucket(BUCKET).key(key)));
+            assertEquals(404, removed.statusCode(), "the test object must be removed");
+        }
     }
 
     @Test void serviceRoundTripMissingAndConditionalOverwrite() throws Exception {

@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import software.amazon.awssdk.awscore.exception.AwsErrorDetails;
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -33,6 +34,7 @@ class S3MediaObjectStorageTest {
 
     private S3MediaObjectStorage adapter() {
         when(builder.build()).thenReturn(client);
+        when(builder.overrideConfiguration()).thenReturn(ClientOverrideConfiguration.builder().build());
         return new S3MediaObjectStorage(builder, "test-bucket");
     }
 
