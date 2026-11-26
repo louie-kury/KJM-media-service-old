@@ -40,6 +40,12 @@ $env:MEDIA_TEST_MYSQL_PASSWORD = '<전용 테스트 비밀번호>'
 
 `MEDIA_TEST_MYSQL_URL`이 없으면 이 테스트는 건너뜁니다. 비밀번호는 실제 환경에서 설정하고 저장소에 기록하지 마세요. MySQL 26.10의 새 빈 테스트 DB에 Flyway V1이 적용됐고, 이후 제약·롤백·동시 완료와 완료 트랜잭션 커밋 전후 예외 주입을 포함한 통합 테스트 2개가 건너뜀 없이 통과했습니다. 실제 네트워크 응답 유실은 재현하지 않았습니다. Flyway는 검증된 MySQL 지원 버전이 9.4까지라는 경고를 출력했습니다. 사용자가 DB 서버 재시작 전후 `media`·`upload_job`·`temporary_attachment`의 행 수가 각각 5·8·5로 같음을 확인했습니다. 개별 행 내용은 비교하지 않았습니다.
 
+미완료 업로드 조회 테스트는 같은 MySQL 설정을 사용하되 테스트마다 `media_test_pending_`과 임의 ID로 새 스키마를 만들고 종료 시 삭제합니다. 전용 테스트 계정에 해당 이름의 스키마 생성·삭제와 마이그레이션 권한이 필요합니다. 기존 스키마를 지우지 않으며, 프로세스가 강제 종료되면 임시 스키마가 남을 수 있습니다.
+
+```powershell
+.\gradlew.bat test --tests '*MySqlPendingUploadQueryIntegrationTest' --rerun-tasks
+```
+
 내부 업로드 흐름을 확인하려면 위 MySQL 설정과 앞서 설명한 로컬 S3Mock·`codex-media-test` 버킷을 함께 준비하고 실행합니다. DB 테스트 행은 남습니다.
 
 ```powershell
@@ -89,6 +95,22 @@ var policy = new MediaPolicyService().getPolicy(MediaUsage.POST_ATTACHMENT);
 
 이 기능은 자동 복구나 정리 작업을 제공하지 않습니다. 내부 서비스와 S3 클라이언트의 운영용 연결 구성도 아직 제공하지 않으며, 테스트 대역의 결과는 실제 MySQL이나 AWS S3 연동 검증을 뜻하지 않습니다.
 
+## 미완료 업로드 작업 조회
+
+`UploadRecordStore.findPending(cutoff, cursor, limit)`은 기준 시각 이하에 갱신된 `PREPARED`, `OUTCOME_UNKNOWN`, `STORED` 작업을 내부적으로 조회합니다. `cutoff`는 `Instant`, `limit`은 1~100이며 첫 페이지의 `cursor`는 `null`입니다. 결과는 갱신 시각과 작업 ID 오름차순이며, 다음 페이지에는 마지막 결과의 시각과 ID로 커서를 만듭니다.
+
+```java
+var page = records.findPending(cutoff, null, 100);
+if (!page.isEmpty()) {
+    var last = page.get(page.size() - 1);
+    var cursor = new PendingUploadCursor(last.updatedAt(), last.job().id());
+    var nextPage = records.findPending(cutoff, cursor, 100);
+}
+```
+
+결과는 조회 시점의 후보이며 조회 중 상태가 바뀔 수 있습니다. 선점·복구·삭제가 가능한지 보장하지 않고, 전체 순회 중 변경된 작업은 다음 순회에서 다시 확인해야 합니다. `PREPARED`나 `OUTCOME_UNKNOWN`은 실제 객체가 없다는 뜻이 아닙니다. 이 조회는 HTTP API나 자동 복구 기능을 제공하지 않습니다.
+
+새로 기록하거나 갱신하는 업로드 작업과 새 미디어·임시 첨부의 시각은 UTC 기준으로 저장합니다. 이전에 저장된 `DATETIME` 값은 당시 DB 세션 시간대를 따르므로 시간대가 불명확할 수 있고 자동 변환되지 않습니다. 기존 데이터를 시간 기준으로 조회하기 전 실제 저장 당시 시간대를 확인해야 합니다.
 ## 현재 한계
 
 - 파일 앞부분의 식별 정보 검사로 형식을 추정합니다. MP4는 `ffprobe`로 표지 이미지가 아닌 영상 스트림을 확인합니다. 파일 전체의 무결성, 재생 가능 여부나 악성 코드가 없음을 보장하지 않습니다. MP4의 `ftyp` 상자는 앞 4,096바이트 안에 있어야 합니다.
