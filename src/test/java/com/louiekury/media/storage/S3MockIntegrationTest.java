@@ -29,6 +29,7 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
 import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.model.ChecksumMode;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** Opt-in test: only an explicitly configured local S3Mock endpoint is allowed. */
@@ -154,9 +155,12 @@ class S3MockIntegrationTest {
                 var observed = storage.observe(key);
                 assertEquals(PNG.length, observed.size());
                 assertEquals("image/png", observed.contentType());
-                if (observed.sha256() != null) {
+                String actualChecksum = direct.headObject(request -> request.bucket(BUCKET).key(key)
+                        .checksumMode(ChecksumMode.ENABLED)).checksumSHA256();
+                assertEquals(actualChecksum, observed.sha256());
+                if (actualChecksum != null) {
                     String expected = java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(PNG));
-                    assertEquals(expected, observed.sha256());
+                    assertEquals(expected, actualChecksum);
                 }
                 assertArrayEquals(PNG, direct.getObjectAsBytes(request -> request.bucket(BUCKET).key(key)).asByteArray());
                 var missing = assertThrows(StorageException.class, () -> storage.observe(prefix + "missing.png"));
